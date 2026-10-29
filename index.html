@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>跨平台 DeviceMotion 測試</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f7;
+            color: #1d1d1f;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        button {
+            background-color: #0071e3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-bottom: 20px;
+            width: 100%;
+        }
+
+        button:hover {
+            background-color: #0077ed;
+        }
+
+        .data-box {
+            background: #f2f2f7;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: left;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        .status {
+            font-weight: bold;
+            color: #86868b;
+            margin-bottom: 15px;
+        }
+
+        .success {
+            color: #34c759;
+        }
+
+        .error {
+            color: #ff3b30;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h2>手機動態感測器 (DeviceMotion)</h2>
+        <p class="status"
+            id="status">目前狀態：尚未啟動</p>
+
+        <!-- iOS 必備：必須透過使用者點擊按鈕來觸發權限請求 -->
+        <button id="startBtn">啟動動態感測器</button>
+
+        <h3>1. 加速度 (不含重力)</h3>
+        <div class="data-box">
+            X 軸: <span id="acc-x">0.00</span> m/s²<br>
+            Y 軸: <span id="acc-y">0.00</span> m/s²<br>
+            Z 軸: <span id="acc-z">0.00</span> m/s²
+        </div>
+
+        <h3>2. 加速度 (包含重力)</h3>
+        <div class="data-box">
+            X 軸: <span id="accG-x">0.00</span> m/s²<br>
+            Y 軸: <span id="accG-y">0.00</span> m/s²<br>
+            Z 軸: <span id="accG-z">0.00</span> m/s²
+        </div>
+
+        <h3>3. 旋轉角速度 (陀螺儀)</h3>
+        <div class="data-box">
+            Alpha (Z軸自轉): <span id="rot-alpha">0.00</span> deg/s<br>
+            Beta (X軸前後): <span id="rot-beta">0.00</span> deg/s<br>
+            Gamma (Y軸左右): <span id="rot-gamma">0.00</span> deg/s
+        </div>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const statusText = document.getElementById('status');
+
+        // 格式化數字，保留小數點後兩位
+        function format(num) {
+            return num !== null && num !== undefined ? num.toFixed(2) : "N/A";
+        }
+
+        // 核心監聽事件：處理感測器變更資料
+        function handleMotion(event) {
+            // 1. 取得不含重力的加速度
+            if (event.acceleration) {
+                document.getElementById('acc-x').innerText = format(event.acceleration.x);
+                document.getElementById('acc-y').innerText = format(event.acceleration.y);
+                document.getElementById('acc-z').innerText = format(event.acceleration.z);
+            }
+
+            // 2. 取得包含重力的加速度（手機靜止置於桌面時，Z 軸通常約為 9.8）
+            if (event.accelerationIncludingGravity) {
+                document.getElementById('accG-x').innerText = format(event.accelerationIncludingGravity.x);
+                document.getElementById('accG-y').innerText = format(event.accelerationIncludingGravity.y);
+                document.getElementById('accG-z').innerText = format(event.accelerationIncludingGravity.z);
+            }
+
+            // 3. 取得旋轉速度 (Rotation Rate)
+            if (event.rotationRate) {
+                document.getElementById('rot-alpha').innerText = format(event.rotationRate.alpha);
+                document.getElementById('rot-beta').innerText = format(event.rotationRate.beta);
+                document.getElementById('rot-gamma').innerText = format(event.rotationRate.gamma);
+            }
+        }
+
+        // 啟動與權限檢查邏輯
+        function requestMotionPermission() {
+            // 檢查瀏覽器是否支援 DeviceMotionEvent
+            if (typeof DeviceMotionEvent === 'undefined') {
+                statusText.innerText = "目前狀態：此瀏覽器/裝置不支援 DeviceMotion";
+                statusText.className = "status error";
+                return;
+            }
+
+            // 判斷是否為 iOS 13+ 需要請求權限的環境
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                statusText.innerText = "目前狀態：正在請求 iOS 權限...";
+
+                DeviceMotionEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('devicemotion', handleMotion, true);
+                            statusText.innerText = "目前狀態：動態感測中 (iOS 已授權)";
+                            statusText.className = "status success";
+                            startBtn.style.display = 'none'; // 授權成功後隱藏按鈕
+                        } else {
+                            statusText.innerText = "目前狀態：iOS 授權被拒絕";
+                            statusText.className = "status error";
+                        }
+                    })
+                    .catch(error => {
+                        console.error(error);
+                        statusText.innerText = "目前狀態：權限請求發生錯誤";
+                        statusText.className = "status error";
+                    });
+            } else {
+                // Android 或舊版 iOS 裝置，直接綁定監聽
+                window.addEventListener('devicemotion', handleMotion, true);
+                statusText.innerText = "目前狀態：動態感測中 (Android/標準環境)";
+                statusText.className = "status success";
+                startBtn.style.display = 'none'; // 啟用後隱藏按鈕
+            }
+        }
+
+        // 綁定按鈕點擊事件
+        startBtn.addEventListener('click', requestMotionPermission);
+    </script>
+
+</body>
+
+</html>

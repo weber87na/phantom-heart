@@ -1,0 +1,15 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local dependencies and generated output
+node_modules/
+dist/
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
