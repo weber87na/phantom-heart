@@ -42,6 +42,11 @@
             background-color: #0077ed;
         }
 
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
         .data-box {
             background: #f2f2f7;
             padding: 15px;
@@ -65,6 +70,35 @@
         .error {
             color: #ff3b30;
         }
+
+        .device-info {
+            text-align: left;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f2f2f7;
+            border-radius: 8px;
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+        }
+
+        .device-info h3 {
+            margin-top: 0;
+        }
+
+        .device-info dl {
+            display: grid;
+            grid-template-columns: 5em minmax(0, 1fr);
+            gap: 4px 12px;
+        }
+
+        .device-info dd {
+            margin: 0;
+        }
+
+        .device-info small, .device-info details {
+            font-size: 12px;
+            color: #555;
+        }
     </style>
 </head>
 
@@ -72,108 +106,259 @@
 
     <div class="container">
         <h2>手機動態感測器 (DeviceMotion)</h2>
+        <section class="device-info" aria-labelledby="device-heading">
+            <h3 id="device-heading">客戶端裝置資訊</h3>
+            <dl>
+                <dt>作業系統</dt><dd id="device-os">辨識中…</dd>
+                <dt>瀏覽器</dt><dd id="device-browser">辨識中…</dd>
+                <dt>裝置類型</dt><dd id="device-type">辨識中…</dd>
+                <dt>裝置型號</dt><dd id="device-model">瀏覽器未提供</dd>
+            </dl>
+            <small>依瀏覽器提供的資訊推測，桌面模式或隱私設定可能影響結果；型號可能無法取得。</small>
+            <details>
+                <summary>檢視瀏覽器識別字串</summary>
+                <p id="device-ua"></p>
+            </details>
+        </section>
         <p class="status"
-            id="status">目前狀態：尚未啟動</p>
+            id="status" role="status" aria-live="polite">目前狀態：尚未啟動</p>
 
-        <!-- iOS 必備：必須透過使用者點擊按鈕來觸發權限請求 -->
-        <button id="startBtn">啟動動態感測器</button>
+        <!-- 需要權限的瀏覽器，必須透過使用者點擊來觸發請求。 -->
+        <button id="startBtn" type="button">啟動動態感測器</button>
 
         <h3>1. 加速度 (不含重力)</h3>
         <div class="data-box">
-            X 軸: <span id="acc-x">0.00</span> m/s²<br>
-            Y 軸: <span id="acc-y">0.00</span> m/s²<br>
-            Z 軸: <span id="acc-z">0.00</span> m/s²
+            X 軸: <span id="acc-x">—</span> m/s²<br>
+            Y 軸: <span id="acc-y">—</span> m/s²<br>
+            Z 軸: <span id="acc-z">—</span> m/s²
         </div>
 
         <h3>2. 加速度 (包含重力)</h3>
         <div class="data-box">
-            X 軸: <span id="accG-x">0.00</span> m/s²<br>
-            Y 軸: <span id="accG-y">0.00</span> m/s²<br>
-            Z 軸: <span id="accG-z">0.00</span> m/s²
+            X 軸: <span id="accG-x">—</span> m/s²<br>
+            Y 軸: <span id="accG-y">—</span> m/s²<br>
+            Z 軸: <span id="accG-z">—</span> m/s²
         </div>
 
         <h3>3. 旋轉角速度 (陀螺儀)</h3>
         <div class="data-box">
-            Alpha (Z軸自轉): <span id="rot-alpha">0.00</span> deg/s<br>
-            Beta (X軸前後): <span id="rot-beta">0.00</span> deg/s<br>
-            Gamma (Y軸左右): <span id="rot-gamma">0.00</span> deg/s
+            Alpha (Z軸自轉): <span id="rot-alpha">—</span> deg/s<br>
+            Beta (X軸前後): <span id="rot-beta">—</span> deg/s<br>
+            Gamma (Y軸左右): <span id="rot-gamma">—</span> deg/s
         </div>
     </div>
 
     <script>
         const startBtn = document.getElementById('startBtn');
         const statusText = document.getElementById('status');
+        const sensorFields = [
+            ['acceleration', 'x', 'acc-x'],
+            ['acceleration', 'y', 'acc-y'],
+            ['acceleration', 'z', 'acc-z'],
+            ['accelerationIncludingGravity', 'x', 'accG-x'],
+            ['accelerationIncludingGravity', 'y', 'accG-y'],
+            ['accelerationIncludingGravity', 'z', 'accG-z'],
+            ['rotationRate', 'alpha', 'rot-alpha'],
+            ['rotationRate', 'beta', 'rot-beta'],
+            ['rotationRate', 'gamma', 'rot-gamma']
+        ].map(([group, axis, id]) => ({ group, axis, element: document.getElementById(id) }));
+        const dataTimeoutMs = 8000;
+        let motionState = 'idle';
+        let dataTimer = null;
+        let requestVersion = 0;
 
-        // 格式化數字，保留小數點後兩位
+        // 僅供資訊顯示，不使用這些推測結果決定感測器是否可用。
+        function detectClientDevice(client = navigator) {
+            const ua = client.userAgent || '';
+            const hints = client.userAgentData;
+            const platform = hints?.platform || '';
+            const brands = hints?.brands || [];
+            const isIPad = /iPad/i.test(ua) ||
+                (/Macintosh/i.test(ua) && client.maxTouchPoints > 1);
+            const platforms = {
+                Android: 'Android', iOS: 'iOS', Windows: 'Windows',
+                macOS: 'macOS', 'Chrome OS': 'ChromeOS', Linux: 'Linux'
+            };
+
+            let os = platforms[platform] || '無法辨識';
+            if (isIPad) os = 'iPadOS（推測）';
+            else if (!platforms[platform]) {
+                const systems = [
+                    [/Android/i, 'Android'], [/iPhone|iPod/i, 'iOS'],
+                    [/Windows/i, 'Windows'], [/CrOS/i, 'ChromeOS'],
+                    [/Macintosh|Mac OS X/i, 'macOS'], [/Linux/i, 'Linux']
+                ];
+                os = systems.find(([pattern]) => pattern.test(ua))?.[1] || '無法辨識';
+            }
+
+            const knownBrands = [
+                ['Microsoft Edge', 'Edge'], ['Samsung Internet', 'Samsung Internet'],
+                ['Opera', 'Opera'], ['Google Chrome', 'Chrome'], ['Firefox', 'Firefox']
+            ];
+            const knownBrand = knownBrands.find(([name]) => brands.some(item => item.brand === name));
+            let browser = knownBrand?.[1];
+            if (!browser) {
+                // 先比對衍生瀏覽器，避免其 Chrome/Safari 相容字串搶先命中。
+                const browsers = [
+                    [/EdgA?\/|EdgiOS\//i, 'Edge'], [/SamsungBrowser\//i, 'Samsung Internet'],
+                    [/OPR\/|OPiOS\//i, 'Opera'], [/Firefox\/|FxiOS\//i, 'Firefox'],
+                    [/Chrome\/|CriOS\//i, 'Chrome'], [/Version\/.*Safari\//i, 'Safari']
+                ];
+                browser = browsers.find(([pattern]) => pattern.test(ua))?.[1] ||
+                    (brands.some(item => item.brand === 'Chromium') ? 'Chromium 系瀏覽器' : '無法辨識');
+            }
+
+            let type = '無法辨識';
+            if (isIPad) type = '平板（推測）';
+            else if (os === 'Android') {
+                const mobile = typeof hints?.mobile === 'boolean' ? hints.mobile : /Mobile/i.test(ua);
+                type = mobile ? '手機（推測）' : '平板或桌面模式（推測）';
+            } else if (/iPhone/i.test(ua)) type = '手機（iPhone）';
+            else if (/iPod/i.test(ua)) type = '行動裝置（iPod touch）';
+            else if (hints?.mobile) type = '行動裝置';
+            else if (['Windows', 'macOS', 'Linux', 'ChromeOS'].includes(os)) type = '電腦或平板（推測）';
+
+            return { os, browser, type, model: '瀏覽器未提供' };
+        }
+
+        async function displayClientDevice() {
+            const device = detectClientDevice();
+            Object.entries(device).forEach(([key, value]) => {
+                document.getElementById(`device-${key}`).textContent = value;
+            });
+            document.getElementById('device-ua').textContent = navigator.userAgent || '瀏覽器未提供';
+
+            // 部分瀏覽器可提供型號；此查詢不阻擋感測器啟動，也不猜測缺失資訊。
+            try {
+                const hints = navigator.userAgentData;
+                if (typeof hints?.getHighEntropyValues !== 'function') return;
+                const { model } = await hints.getHighEntropyValues(['model']);
+                const value = typeof model === 'string' ? model.trim() : '';
+                if (value && value !== 'K') {
+                    document.getElementById('device-model').textContent = value;
+                }
+            } catch {
+                // 型號受隱私設定或政策限制時，維持「瀏覽器未提供」。
+            }
+        }
+
+        // 0 是有效讀數；null、undefined、NaN 與 Infinity 都不是。
         function format(num) {
-            return num !== null && num !== undefined ? num.toFixed(2) : "N/A";
+            return Number.isFinite(num) ? num.toFixed(2) : 'N/A';
         }
 
-        // 核心監聽事件：處理感測器變更資料
+        function setStatus(message, style = '') {
+            statusText.textContent = `目前狀態：${message}`;
+            statusText.className = `status ${style}`.trim();
+        }
+
+        function resetReadings(value = '—') {
+            sensorFields.forEach(({ element }) => { element.textContent = value; });
+        }
+
+        function stopMotion() {
+            requestVersion++;
+            window.removeEventListener('devicemotion', handleMotion);
+            window.clearTimeout(dataTimer);
+            dataTimer = null;
+            motionState = 'idle';
+            startBtn.disabled = false;
+            startBtn.textContent = '啟動動態感測器';
+            resetReadings();
+        }
+
+        function armDataTimeout() {
+            window.clearTimeout(dataTimer);
+            dataTimer = window.setTimeout(() => {
+                stopMotion();
+                resetReadings('N/A');
+                setStatus('8 秒內未收到有效感測資料，請確認瀏覽器權限與裝置支援後重試；這不代表硬體故障。', 'error');
+                startBtn.textContent = '重新嘗試';
+            }, dataTimeoutMs);
+        }
+
         function handleMotion(event) {
-            // 1. 取得不含重力的加速度
-            if (event.acceleration) {
-                document.getElementById('acc-x').innerText = format(event.acceleration.x);
-                document.getElementById('acc-y').innerText = format(event.acceleration.y);
-                document.getElementById('acc-z').innerText = format(event.acceleration.z);
-            }
+            if (motionState !== 'waiting' && motionState !== 'active') return;
 
-            // 2. 取得包含重力的加速度（手機靜止置於桌面時，Z 軸通常約為 9.8）
-            if (event.accelerationIncludingGravity) {
-                document.getElementById('accG-x').innerText = format(event.accelerationIncludingGravity.x);
-                document.getElementById('accG-y').innerText = format(event.accelerationIncludingGravity.y);
-                document.getElementById('accG-z').innerText = format(event.accelerationIncludingGravity.z);
-            }
+            let hasValidData = false;
+            sensorFields.forEach(({ group, axis, element }) => {
+                const value = event[group]?.[axis];
+                element.textContent = format(value);
+                hasValidData ||= Number.isFinite(value);
+            });
 
-            // 3. 取得旋轉速度 (Rotation Rate)
-            if (event.rotationRate) {
-                document.getElementById('rot-alpha').innerText = format(event.rotationRate.alpha);
-                document.getElementById('rot-beta').innerText = format(event.rotationRate.beta);
-                document.getElementById('rot-gamma').innerText = format(event.rotationRate.gamma);
+            if (hasValidData) {
+                if (motionState !== 'active') {
+                    setStatus('啟動成功，動態感測中（N/A 表示該欄位無資料）', 'success');
+                }
+                motionState = 'active';
+                armDataTimeout();
+            } else if (motionState === 'active') {
+                motionState = 'waiting';
+                setStatus('目前沒有有效感測資料，等待恢復…');
             }
         }
 
-        // 啟動與權限檢查邏輯
-        function requestMotionPermission() {
-            // 檢查瀏覽器是否支援 DeviceMotionEvent
-            if (typeof DeviceMotionEvent === 'undefined') {
-                statusText.innerText = "目前狀態：此瀏覽器/裝置不支援 DeviceMotion";
-                statusText.className = "status error";
+        function startListening() {
+            motionState = 'waiting';
+            setStatus('等待有效感測資料，請輕輕移動或旋轉裝置…');
+            startBtn.disabled = false;
+            startBtn.textContent = '停止感測';
+            window.addEventListener('devicemotion', handleMotion);
+            armDataTimeout();
+        }
+
+        // 依 API 能力請求權限，與裝置資訊辨識完全分開。
+        async function requestMotionPermission() {
+            if (motionState === 'requesting') return;
+            if (motionState === 'waiting' || motionState === 'active') {
+                stopMotion();
+                setStatus('已停止感測');
                 return;
             }
 
-            // 判斷是否為 iOS 13+ 需要請求權限的環境
-            if (typeof DeviceMotionEvent.requestPermission === 'function') {
-                statusText.innerText = "目前狀態：正在請求 iOS 權限...";
+            if (!window.isSecureContext) {
+                setStatus('需要安全連線，請使用 HTTPS 網址開啟此頁。', 'error');
+                return;
+            }
+            if (typeof window.DeviceMotionEvent === 'undefined') {
+                setStatus('此瀏覽器未提供 DeviceMotion API。', 'error');
+                return;
+            }
 
-                DeviceMotionEvent.requestPermission()
-                    .then(permissionState => {
-                        if (permissionState === 'granted') {
-                            window.addEventListener('devicemotion', handleMotion, true);
-                            statusText.innerText = "目前狀態：動態感測中 (iOS 已授權)";
-                            statusText.className = "status success";
-                            startBtn.style.display = 'none'; // 授權成功後隱藏按鈕
-                        } else {
-                            statusText.innerText = "目前狀態：iOS 授權被拒絕";
-                            statusText.className = "status error";
-                        }
-                    })
-                    .catch(error => {
-                        console.error(error);
-                        statusText.innerText = "目前狀態：權限請求發生錯誤";
-                        statusText.className = "status error";
-                    });
-            } else {
-                // Android 或舊版 iOS 裝置，直接綁定監聽
-                window.addEventListener('devicemotion', handleMotion, true);
-                statusText.innerText = "目前狀態：動態感測中 (Android/標準環境)";
-                statusText.className = "status success";
-                startBtn.style.display = 'none'; // 啟用後隱藏按鈕
+            motionState = 'requesting';
+            const currentRequest = ++requestVersion;
+            startBtn.disabled = true;
+            startBtn.textContent = '啟動中…';
+            resetReadings();
+
+            try {
+                if (typeof window.DeviceMotionEvent.requestPermission === 'function') {
+                    setStatus('正在請求感測器存取權限…');
+                    // 在點擊處理函式內直接請求，保留使用者操作的授權條件。
+                    const permission = await window.DeviceMotionEvent.requestPermission();
+                    if (currentRequest !== requestVersion) return;
+                    if (permission !== 'granted') {
+                        stopMotion();
+                        setStatus('感測器存取未獲授權，請檢查網站權限後重試。', 'error');
+                        return;
+                    }
+                }
+                startListening();
+            } catch (error) {
+                if (currentRequest !== requestVersion) return;
+                stopMotion();
+                console.error(error);
+                setStatus('無法啟動感測器，請檢查瀏覽器權限後重試。', 'error');
             }
         }
 
-        // 綁定按鈕點擊事件
         startBtn.addEventListener('click', requestMotionPermission);
+        window.addEventListener('pagehide', () => {
+            stopMotion();
+            setStatus('已停止感測');
+        });
+        displayClientDevice();
     </script>
 
 </body>
